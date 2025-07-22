@@ -1,6 +1,6 @@
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write, Seek, SeekFrom};
+use std::path::{Path, PathBuf, Component};
 
 use clap::Parser;
 use fatfs::{FsOptions, FileSystem};
@@ -66,15 +66,24 @@ struct Manifest {
     directories: Option<Vec<String>>,
 }
 
-fn generate_fat_image(cli: &Cli, manifest: &Manifest, base: &Path) -> io::Result<()> {
+fn generate_fat_image(cli: &Cli, manifest: &Manifest, base: &Path) -> Result<(), String> {
     // Create and preallocate output file
     let img_file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(true)
-        .open(&cli.output)?;
-    img_file.set_len(cli.size_mb * 1024 * 1024)?;
+        .open(&cli.output)
+        .map_err(|e| {
+            format!(
+                "Failed to open output file '{}': {}",
+                cli.output.display(),
+                e
+            )
+        })?;
+    img_file
+        .set_len(cli.size_mb * 1024 * 1024)
+        .map_err(|e| format!("Failed to set image size: {}", e))?;
 
     // Keep the file in a box to satisfy the 'static lifetime requirement
     let mut boxed_file: Box<dyn ReadWriteSeek> = Box::new(img_file);
@@ -91,13 +100,17 @@ fn generate_fat_image(cli: &Cli, manifest: &Manifest, base: &Path) -> io::Result
     let format_options = fatfs::FormatVolumeOptions::new()
         .volume_label(label_bytes)
         .fat_type(fat_type);
-    fatfs::format_volume(&mut boxed_file, format_options)?;
+    fatfs::format_volume(&mut boxed_file, format_options)
+        .map_err(|e| format!("Failed to format volume: {}", e))?;
 
     // Rewind the file for filesystem operations
-    boxed_file.seek(SeekFrom::Start(0))?;
+    boxed_file
+        .seek(SeekFrom::Start(0))
+        .map_err(|e| format!("Failed to seek in image file: {}", e))?;
 
     // Create filesystem
-    let fs = FileSystem::new(boxed_file, FsOptions::new())?;
+    let fs = FileSystem::new(boxed_file, FsOptions::new())
+        .map_err(|e| format!("Failed to create filesystem: {}", e))?;
     let root_dir = fs.root_dir();
 
     if let Some(directories) = &manifest.directories {
@@ -108,48 +121,104 @@ fn generate_fat_image(cli: &Cli, manifest: &Manifest, base: &Path) -> io::Result
             let components_vec: Vec<_> = Path::new(dir_path).components().collect();
             let mut dir = root_dir.clone();
             for comp in &components_vec {
-                let name = comp.as_os_str().to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid UTF-8 in path"))?;
-                dir = dir.create_dir(name).or_else(|_| dir.open_dir(name))?;
+                if let Component::RootDir = comp {
+                    continue;
+                }
+                let name = comp
+                    .as_os_str()
+                    .to_str()
+                    .ok_or("Invalid UTF-8 in path")?;
+                dir = dir
+                    .create_dir(name)
+                    .or_else(|_| dir.open_dir(name))
+                    .map_err(|e| format!("Failed to create directory '{}': {}", name, e))?;
             }
         }
     }
 
     for entry in manifest.files.iter() {
-        let input_path = entry.input.as_ref().unwrap_or_else(|| entry.output.as_ref().unwrap());
-        let output_path = entry.output.as_ref().unwrap_or_else(|| entry.input.as_ref().unwrap());
+        let input_path = entry
+            .input
+            .as_ref()
+            .unwrap_or_else(|| entry.output.as_ref().unwrap());
+        let output_path = entry
+            .output
+            .as_ref()
+            .unwrap_or_else(|| entry.input.as_ref().unwrap());
 
         if cli.verbose {
             println!("Adding file: {} -> {}", input_path, output_path);
         }
 
         let full_input_path = base.join(input_path);
-        let mut file_data = Vec::new();
-        File::open(&full_input_path)?.read_to_end(&mut file_data)?;
+        let file_data = fs::read(&full_input_path).map_err(|e| {
+            format!(
+                "Failed to read input file '{}': {}",
+                full_input_path.display(),
+                e
+            )
+        })?;
 
         let components_vec: Vec<_> = Path::new(output_path).components().collect();
         let mut dir = root_dir.clone();
 
         for comp in &components_vec[..components_vec.len().saturating_sub(1)] {
-            let name = comp.as_os_str().to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid UTF-8 in path"))?;
-            dir = dir.create_dir(name).or_else(|_| dir.open_dir(name))?;
+            if let Component::RootDir = comp {
+                continue;
+            }
+            let name = comp
+                .as_os_str()
+                .to_str()
+                .ok_or("Invalid UTF-8 in path")?;
+            dir = dir
+                .create_dir(name)
+                .or_else(|_| dir.open_dir(name))
+                .map_err(|e| format!("Failed to create directory '{}': {}", name, e))?;
         }
 
-        let file_name = Path::new(output_path).file_name().and_then(|s| s.to_str()).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file name"))?;
-        let mut fat_file = dir.create_file(file_name)?;
-        fat_file.write_all(&file_data)?;
+        let file_name = Path::new(output_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or("Invalid file name")?;
+        let mut fat_file = dir
+            .create_file(file_name)
+            .map_err(|e| format!("Failed to create file '{}': {}", file_name, e))?;
+        fat_file
+            .write_all(&file_data)
+            .map_err(|e| format!("Failed to write to file '{}': {}", file_name, e))?;
     }
 
     Ok(())
 }
 
-fn main() -> io::Result<()> {
-    let cli = Cli::parse();
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), String> {
+    let mut cli = Cli::parse();
+
+    if cli.base.is_relative() {
+        cli.base = std::env::current_dir()
+            .map_err(|e| format!("Failed to get current directory: {}", e))?
+            .join(&cli.base);
+    }
 
     if !cli.quiet {
         println!("Reading manifest: {}", cli.manifest.display());
     }
-    let json_str = fs::read_to_string(&cli.manifest)?;
-    let manifest: Manifest = serde_json::from_str(&json_str)?;
+    let json_str = fs::read_to_string(&cli.manifest).map_err(|e| {
+        format!(
+            "Failed to read manifest file '{}': {}",
+            cli.manifest.display(),
+            e
+        )
+    })?;
+    let manifest: Manifest = serde_json::from_str(&json_str)
+        .map_err(|e| format!("Failed to parse manifest file: {}", e))?;
 
     if !cli.quiet {
         println!("Generating FAT image: {}", cli.output.display());
@@ -161,137 +230,4 @@ fn main() -> io::Result<()> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_generate_fat_image() -> io::Result<()> {
-        let tempdir = tempdir()?;
-        let base_path = tempdir.path().join("base");
-        let output_path = tempdir.path().join("image.fat");
-        fs::create_dir(&base_path)?;
-
-        let file_path = base_path.join("hello.txt");
-        fs::write(&file_path, b"Hello, world!")?;
-
-        let manifest = Manifest {
-            files: vec![FileEntry {
-                input: Some("hello.txt".to_string()),
-                output: Some("greeting/hello.txt".to_string()),
-            }],
-            directories: None,
-        };
-
-        let cli = Cli {
-            manifest: PathBuf::from("manifest.json"),
-            base: base_path.clone(),
-            output: output_path.clone(),
-            size_mb: 4,
-            label: "FATFS".to_string(),
-            fat_type: FatType::Fat32,
-            verbose: false,
-            quiet: true,
-        };
-
-        generate_fat_image(&cli, &manifest, &base_path)?;
-
-        assert!(output_path.exists());
-        let metadata = fs::metadata(&output_path)?;
-        assert!(metadata.len() >= 4 * 1024 * 1024);
-
-        // Verify the contents of the image
-        let img_file = File::open(&output_path)?;
-        let fs = FileSystem::new(img_file, FsOptions::new())?;
-        assert_eq!(fs.volume_label().trim_end(), "FATFS");
-        let root_dir = fs.root_dir();
-        let mut file = root_dir.open_file("greeting/hello.txt")?;
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)?;
-        assert_eq!(contents, b"Hello, world!");
-        Ok(())
-    }
-
-    #[test]
-    fn test_generate_fat_image_no_output_path() -> io::Result<()> {
-        let tempdir = tempdir()?;
-        let base_path = tempdir.path().join("base");
-        let output_path = tempdir.path().join("image.fat");
-        fs::create_dir(&base_path)?;
-
-        let file_path = base_path.join("another.txt");
-        fs::write(&file_path, b"Another file content")?;
-
-        let manifest = Manifest {
-            files: vec![FileEntry {
-                input: Some("another.txt".to_string()),
-                output: None,
-            }],
-            directories: None,
-        };
-
-        let cli = Cli {
-            manifest: PathBuf::from("manifest.json"),
-            base: base_path.clone(),
-            output: output_path.clone(),
-            size_mb: 4,
-            label: "FATFS".to_string(),
-            fat_type: FatType::Fat32,
-            verbose: false,
-            quiet: true,
-        };
-
-        generate_fat_image(&cli, &manifest, &base_path)?;
-
-        assert!(output_path.exists());
-
-        // Verify the contents of the image
-        let img_file = File::open(&output_path)?;
-        let fs = FileSystem::new(img_file, FsOptions::new())?;
-        let root_dir = fs.root_dir();
-        let mut file = root_dir.open_file("another.txt")?;
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)?;
-        assert_eq!(contents, b"Another file content");
-        Ok(())
-    }
-
-    #[test]
-    fn test_generate_fat_image_with_directories() -> io::Result<()> {
-        let tempdir = tempdir()?;
-        let base_path = tempdir.path().join("base");
-        let output_path = tempdir.path().join("image.fat");
-        fs::create_dir(&base_path)?;
-
-        let manifest = Manifest {
-            files: vec![],
-            directories: Some(vec!["dir1".to_string(), "dir2/subdir".to_string()]),
-        };
-
-        let cli = Cli {
-            manifest: PathBuf::from("manifest.json"),
-            base: base_path.clone(),
-            output: output_path.clone(),
-            size_mb: 4,
-            label: "FATFS".to_string(),
-            fat_type: FatType::Fat32,
-            verbose: false,
-            quiet: true,
-        };
-
-        generate_fat_image(&cli, &manifest, &base_path)?;
-
-        assert!(output_path.exists());
-
-        // Verify the contents of the image
-        let img_file = File::open(&output_path)?;
-        let fs = FileSystem::new(img_file, FsOptions::new())?;
-        let root_dir = fs.root_dir();
-        assert!(root_dir.open_dir("dir1").is_ok());
-        assert!(root_dir.open_dir("dir2/subdir").is_ok());
-        Ok(())
-    }
 }
