@@ -15,7 +15,7 @@ fn test_mkfat_integration() {
     let manifest_content = r#"{
         "files": [
             {
-                "input": "hello.txt",
+                "filename": "hello.txt",
                 "output": "greeting/hello.txt"
             }
         ]

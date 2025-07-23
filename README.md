@@ -26,8 +26,8 @@ mkfat --manifest <manifest.json> --base <base_path> --output <image.fat>
 The manifest is a JSON file that describes the contents of the FAT image. It has two main keys: `files` and `directories`.
 
 *   `files`: A list of file entries to include in the image. Each entry is an object with the following keys:
-    *   `input`: The path to the source file, relative to the `base` path.
-    *   `output`: The path where the file will be placed in the FAT image. If omitted, the `input` path is used.
+    *   `filename`: The path to the source file, relative to the `base` path.
+    *   `output`: The path where the file will be placed in the FAT image. If omitted, the `filename` path is used.
 *   `directories`: An optional list of empty directories to create in the image.
 
 ### Example Manifest
@@ -36,11 +36,11 @@ The manifest is a JSON file that describes the contents of the FAT image. It has
 {
   "files": [
     {
-      "input": "data/hello.txt",
+      "filename": "data/hello.txt",
       "output": "greeting/hello.txt"
     },
     {
-      "input": "data/another.txt"
+      "filename": "data/another.txt"
     }
   ],
   "directories": [
@@ -66,11 +66,11 @@ The manifest is a JSON file that describes the contents of the FAT image. It has
     {
       "files": [
         {
-          "input": "data/hello.txt",
+          "filename": "data/hello.txt",
           "output": "greeting/hello.txt"
         },
         {
-          "input": "data/another.txt"
+          "filename": "data/another.txt"
         }
       ],
       "directories": [
