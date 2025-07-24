@@ -1,9 +1,9 @@
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write, Seek, SeekFrom};
-use std::path::{Path, PathBuf, Component};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Component, Path, PathBuf};
 
 use clap::Parser;
-use fatfs::{FsOptions, FileSystem};
+use fatfs::{FileSystem, FsOptions};
 use serde::Deserialize;
 
 // Custom trait that combines Read, Write, and Seek
@@ -14,9 +14,9 @@ impl<T: Read + Write + Seek> ReadWriteSeek for T {}
 #[command(name = "mkfat")]
 #[command(about = "Create a FAT filesystem from a JSON description.")]
 struct Cli {
-    /// JSON file describing the files to include
+    /// JSON file describing the files to include. If not provided, reads from stdin.
     #[arg(short, long)]
-    manifest: PathBuf,
+    manifest: Option<PathBuf>,
 
     /// Base path to find source files
     #[arg(short, long)]
@@ -124,10 +124,7 @@ fn generate_fat_image(cli: &Cli, manifest: &Manifest, base: &Path) -> Result<(),
                 if let Component::RootDir = comp {
                     continue;
                 }
-                let name = comp
-                    .as_os_str()
-                    .to_str()
-                    .ok_or("Invalid UTF-8 in path")?;
+                let name = comp.as_os_str().to_str().ok_or("Invalid UTF-8 in path")?;
                 dir = dir
                     .create_dir(name)
                     .or_else(|_| dir.open_dir(name))
@@ -166,10 +163,7 @@ fn generate_fat_image(cli: &Cli, manifest: &Manifest, base: &Path) -> Result<(),
             if let Component::RootDir = comp {
                 continue;
             }
-            let name = comp
-                .as_os_str()
-                .to_str()
-                .ok_or("Invalid UTF-8 in path")?;
+            let name = comp.as_os_str().to_str().ok_or("Invalid UTF-8 in path")?;
             dir = dir
                 .create_dir(name)
                 .or_else(|_| dir.open_dir(name))
@@ -207,16 +201,27 @@ fn run() -> Result<(), String> {
             .join(&cli.base);
     }
 
-    if !cli.quiet {
-        println!("Reading manifest: {}", cli.manifest.display());
-    }
-    let json_str = fs::read_to_string(&cli.manifest).map_err(|e| {
-        format!(
-            "Failed to read manifest file '{}': {}",
-            cli.manifest.display(),
-            e
-        )
-    })?;
+    let json_str = if let Some(manifest_path) = &cli.manifest {
+        if !cli.quiet {
+            println!("Reading manifest: {}", manifest_path.display());
+        }
+        fs::read_to_string(manifest_path).map_err(|e| {
+            format!(
+                "Failed to read manifest file '{}': {}",
+                manifest_path.display(),
+                e
+            )
+        })?
+    } else {
+        if !cli.quiet {
+            println!("Reading manifest from stdin");
+        }
+        let mut buffer = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buffer)
+            .map_err(|e| format!("Failed to read from stdin: {}", e))?;
+        buffer
+    };
     let manifest: Manifest = serde_json::from_str(&json_str)
         .map_err(|e| format!("Failed to parse manifest file: {}", e))?;
 
