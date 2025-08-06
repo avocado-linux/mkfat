@@ -54,10 +54,80 @@ enum FatType {
     Fat32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct FileEntry {
-    r#in: Option<String>,
+    r#in: String,
     out: Option<String>,
+}
+
+impl FileEntry {
+    fn get_in(&self) -> &str {
+        &self.r#in
+    }
+
+    fn get_out(&self) -> &str {
+        self.out.as_deref().unwrap_or_else(|| self.get_in())
+    }
+}
+
+impl<'de> Deserialize<'de> for FileEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct FileEntryVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for FileEntryVisitor {
+            type Value = FileEntry;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string or an object with 'in' and 'out' keys")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<FileEntry, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(FileEntry {
+                    r#in: value.to_string(),
+                    out: None,
+                })
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<FileEntry, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                let mut r#in: Option<String> = None;
+                let mut out: Option<String> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "in" => {
+                            if r#in.is_some() {
+                                return Err(serde::de::Error::duplicate_field("in"));
+                            }
+                            r#in = Some(map.next_value()?);
+                        }
+                        "out" => {
+                            if out.is_some() {
+                                return Err(serde::de::Error::duplicate_field("out"));
+                            }
+                            out = Some(map.next_value()?);
+                        }
+                        _ => {
+                            let _ = map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+
+                let r#in = r#in.ok_or_else(|| serde::de::Error::missing_field("in"))?;
+                Ok(FileEntry { r#in, out })
+            }
+        }
+
+        deserializer.deserialize_any(FileEntryVisitor)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,14 +204,8 @@ fn generate_fat_image(cli: &Cli, manifest: &Manifest, base: &Path) -> Result<(),
     }
 
     for entry in manifest.files.iter() {
-        let input_path = entry
-            .r#in
-            .as_ref()
-            .unwrap_or_else(|| entry.out.as_ref().unwrap());
-        let output_path = entry
-            .out
-            .as_ref()
-            .unwrap_or_else(|| entry.r#in.as_ref().unwrap());
+        let input_path = entry.get_in();
+        let output_path = entry.get_out();
 
         if cli.verbose {
             println!("Adding file: {} -> {}", input_path, output_path);
