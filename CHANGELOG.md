@@ -1,5 +1,11 @@
 # mkfat
 
+## 0.3.0
+
+* Enhancements
+  * Files can be a string filename or an object with in / out
+    A string is intrepreted as `{"in": "<string>"}`
+
 ## 0.2.0
 
 * Enhancements
