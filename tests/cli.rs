@@ -16,8 +16,8 @@ fn test_mkfat_integration() {
     let manifest_content = r#"{
         "files": [
             {
-                "filename": "hello.txt",
-                "output": "greeting/hello.txt"
+                "in": "hello.txt",
+                "out": "greeting/hello.txt"
             }
         ]
     }"#;
@@ -53,8 +53,8 @@ fn test_mkfat_integration_stdin() {
     let manifest_content = r#"{
         "files": [
             {
-                "filename": "hello_stdin.txt",
-                "output": "greeting/hello.txt"
+                "in": "hello_stdin.txt",
+                "out": "greeting/hello.txt"
             }
         ]
     }"#;

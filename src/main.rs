@@ -56,8 +56,8 @@ enum FatType {
 
 #[derive(Debug, Deserialize)]
 struct FileEntry {
-    filename: Option<String>,
-    output: Option<String>,
+    r#in: Option<String>,
+    out: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,13 +135,13 @@ fn generate_fat_image(cli: &Cli, manifest: &Manifest, base: &Path) -> Result<(),
 
     for entry in manifest.files.iter() {
         let input_path = entry
-            .filename
+            .r#in
             .as_ref()
-            .unwrap_or_else(|| entry.output.as_ref().unwrap());
+            .unwrap_or_else(|| entry.out.as_ref().unwrap());
         let output_path = entry
-            .output
+            .out
             .as_ref()
-            .unwrap_or_else(|| entry.filename.as_ref().unwrap());
+            .unwrap_or_else(|| entry.r#in.as_ref().unwrap());
 
         if cli.verbose {
             println!("Adding file: {} -> {}", input_path, output_path);
