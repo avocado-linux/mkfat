@@ -1,5 +1,13 @@
 # mkfat
 
+## 0.4.0
+
+* Enhancements
+  * Changed `--fat-type` to `--variant`
+  * Updated variants to `fat12|fat16|fat32`
+  * Added support for parsing variant from `<manifest>.build_args.variant`
+  * Moved the `files` key to `<manifest>.build_args.files`
+
 ## 0.3.0
 
 * Enhancements

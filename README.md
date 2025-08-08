@@ -14,35 +14,41 @@ mkfat --manifest <manifest.json> --base <base_path> --output <image.fat>
 | --- | --- | --- | --- |
 | `--manifest` | `-m` | JSON file describing the files and directories to include | |
 | `--base` | `-b` | Base path to find source files | |
-| `--output` | `-o` | Output path for the generated FAT image | |
+| `--output` | `-o` | Output path for the generated FAT image. Overrides manifest `out`. | |
 | `--size-mb` | `-s` | Size of the image in MB | 16 |
 | `--label` | `-l` | Set the volume label | FATFS |
-| `--fat-type` | | Set the FAT type (`fat12`, `fat16`, `fat32`) | `fat32` |
+| `--variant` | | Set the filesystem variant (`FAT12`, `FAT16`, `FAT32`). Overrides manifest `build_args.variant`. | |
 | `--verbose` | `-v` | Verbose output | |
 | `--quiet` | `-q` | Quiet output | |
 
 ## Manifest Format
 
-The manifest is a JSON file that describes the contents of the FAT image. It has two main keys: `files` and `directories`.
+The manifest is a JSON file that describes the contents of the FAT image. Top-level keys:
 
-*   `files`: A list of file entries to include in the image. Each entry is an object with the following keys:
-    *   `filename`: The path to the source file, relative to the `base` path.
-    *   `output`: The path where the file will be placed in the FAT image. If omitted, the `filename` path is used.
+*   `build_args`: Contains build-related configuration.
+    *   `files`: A list of file entries to include in the image. Each entry can be either a string or an object with keys:
+        *   `in`: The path to the source file, relative to the `base` path.
+        *   `out`: The target path inside the FAT image. If omitted, the `in` path is used.
+    *   `variant`: Optional string, one of `FAT12`, `FAT16`, `FAT32`. Maps to the filesystem type.
+*   `out`: Optional filename for the generated image. If provided and `--output` is not used, the image will be written to `<base>/<out>`.
 *   `directories`: An optional list of empty directories to create in the image.
 
 ### Example Manifest
 
 ```json
 {
-  "files": [
-    {
-      "filename": "data/hello.txt",
-      "output": "greeting/hello.txt"
-    },
-    {
-      "filename": "data/another.txt"
-    }
-  ],
+  "build_args": {
+    "files": [
+      {
+        "in": "data/hello.txt",
+        "out": "greeting/hello.txt"
+      },
+      {
+        "in": "data/another.txt"
+      }
+    ]
+  },
+  "out": "my_image.fat",
   "directories": [
     "empty_dir",
     "another_dir/subdir"
@@ -64,15 +70,18 @@ The manifest is a JSON file that describes the contents of the FAT image. It has
 
     ```json
     {
-      "files": [
-        {
-          "filename": "data/hello.txt",
-          "output": "greeting/hello.txt"
-        },
-        {
-          "filename": "data/another.txt"
-        }
-      ],
+      "build_args": {
+        "files": [
+          {
+            "in": "data/hello.txt",
+            "out": "greeting/hello.txt"
+          },
+          {
+            "in": "data/another.txt"
+          }
+        ]
+      },
+      "out": "my_image.fat",
       "directories": [
         "empty_dir"
       ]

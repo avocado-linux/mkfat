@@ -22,9 +22,9 @@ struct Cli {
     #[arg(short, long)]
     base: PathBuf,
 
-    /// Output path for the generated FAT image
+    /// Output path for the generated FAT image (overrides manifest top-level 'out')
     #[arg(short, long)]
-    output: PathBuf,
+    output: Option<PathBuf>,
 
     /// Size of the image in MB
     #[arg(short = 's', long, default_value_t = 16)]
@@ -34,9 +34,9 @@ struct Cli {
     #[arg(short, long, default_value = "FATFS")]
     label: String,
 
-    /// Set the FAT type
-    #[arg(long, value_enum, default_value_t = FatType::Fat32)]
-    fat_type: FatType,
+    /// Set the filesystem variant (overrides manifest build_args.variant)
+    #[arg(long, value_enum)]
+    variant: Option<ManifestVariant>,
 
     /// Verbose output
     #[arg(short, long)]
@@ -130,24 +130,48 @@ impl<'de> Deserialize<'de> for FileEntry {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct Manifest {
-    files: Vec<FileEntry>,
-    directories: Option<Vec<String>>,
+#[derive(Debug, Deserialize, clap::ValueEnum, Copy, Clone, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")]
+#[value(rename_all = "UPPERCASE")]
+enum ManifestVariant {
+    FAT12,
+    FAT16,
+    FAT32,
 }
 
-fn generate_fat_image(cli: &Cli, manifest: &Manifest, base: &Path) -> Result<(), String> {
+#[derive(Debug, Deserialize)]
+struct BuildArgs {
+    files: Vec<FileEntry>,
+    variant: Option<ManifestVariant>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Manifest {
+    build_args: BuildArgs,
+    directories: Option<Vec<String>>,
+    /// Optional output filename; when present and CLI --output not provided,
+    /// the effective output path will be base directory joined with this filename
+    out: Option<String>,
+}
+
+fn generate_fat_image(
+    cli: &Cli,
+    manifest: &Manifest,
+    base: &Path,
+    effective_fat_type: FatType,
+    output_path: &Path,
+) -> Result<(), String> {
     // Create and preallocate output file
     let img_file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(true)
-        .open(&cli.output)
+        .open(output_path)
         .map_err(|e| {
             format!(
                 "Failed to open output file '{}': {}",
-                cli.output.display(),
+                output_path.display(),
                 e
             )
         })?;
@@ -158,7 +182,7 @@ fn generate_fat_image(cli: &Cli, manifest: &Manifest, base: &Path) -> Result<(),
     // Keep the file in a box to satisfy the 'static lifetime requirement
     let mut boxed_file: Box<dyn ReadWriteSeek> = Box::new(img_file);
 
-    let fat_type = match cli.fat_type {
+    let fat_type = match effective_fat_type {
         FatType::Fat12 => fatfs::FatType::Fat12,
         FatType::Fat16 => fatfs::FatType::Fat16,
         FatType::Fat32 => fatfs::FatType::Fat32,
@@ -203,7 +227,7 @@ fn generate_fat_image(cli: &Cli, manifest: &Manifest, base: &Path) -> Result<(),
         }
     }
 
-    for entry in manifest.files.iter() {
+    for entry in manifest.build_args.files.iter() {
         let input_path = entry.get_in();
         let output_path = entry.get_out();
 
@@ -289,10 +313,51 @@ fn run() -> Result<(), String> {
     let manifest: Manifest = serde_json::from_str(&json_str)
         .map_err(|e| format!("Failed to parse manifest file: {}", e))?;
 
+    // Determine effective FAT type: CLI overrides manifest, else default to FAT32
+    let effective_fat_type = if let Some(cli_variant) = cli.variant {
+        match cli_variant {
+            ManifestVariant::FAT12 => FatType::Fat12,
+            ManifestVariant::FAT16 => FatType::Fat16,
+            ManifestVariant::FAT32 => FatType::Fat32,
+        }
+    } else if let Some(variant) = &manifest.build_args.variant {
+        match variant {
+            ManifestVariant::FAT12 => FatType::Fat12,
+            ManifestVariant::FAT16 => FatType::Fat16,
+            ManifestVariant::FAT32 => FatType::Fat32,
+        }
+    } else {
+        FatType::Fat32
+    };
+
+    // Determine effective output path: CLI overrides manifest 'out'
+    let effective_output_path = if let Some(cli_out) = &cli.output {
+        cli_out.clone()
+    } else if let Some(out_name) = &manifest.out {
+        cli.base.join(out_name)
+    } else {
+        return Err("Output path not specified. Provide --output or 'out' in manifest.".to_string());
+    };
+
     if !cli.quiet {
-        println!("Generating FAT image: {}", cli.output.display());
+        println!("Generating FAT image: {}", effective_output_path.display());
+        if cli.verbose {
+            let fat_type_str = match effective_fat_type {
+                FatType::Fat12 => "fat12",
+                FatType::Fat16 => "fat16",
+                FatType::Fat32 => "fat32",
+            };
+            println!("FAT type: {}", fat_type_str);
+        }
     }
-    generate_fat_image(&cli, &manifest, &cli.base)?;
+
+    generate_fat_image(
+        &cli,
+        &manifest,
+        &cli.base,
+        effective_fat_type,
+        &effective_output_path,
+    )?;
 
     if !cli.quiet {
         println!("Done.");
